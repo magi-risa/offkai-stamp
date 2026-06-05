@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>オフ会 出退勤打刻</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
+    background: #f5f5f0;
+    color: #1a1a1a;
+    min-height: 100vh;
+    padding: 1.5rem 1rem 3rem;
+  }
+
+  h1 { font-size: 18px; font-weight: 500; margin-bottom: 0.25rem; }
+  .subtitle { font-size: 13px; color: #666; margin-bottom: 1.5rem; }
+
+  .card {
+    background: #fff;
+    border-radius: 12px;
+    border: 0.5px solid #e0e0d8;
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+  }
+
+  .card-title {
+    font-size: 13px;
+    color: #888;
+    font-weight: 500;
+    margin-bottom: 0.75rem;
+  }
+
+  .name-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 8px;
+  }
+
+  .name-btn {
+    padding: 10px 8px;
+    border: 0.5px solid #ddd;
+    border-radius: 8px;
+    background: #fff;
+    color: #1a1a1a;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .name-btn.selected {
+    border: 2px solid #3b8de0;
+    background: #eaf2fb;
+    color: #185fa5;
+  }
+
+  .action-row { display: flex; gap: 8px; margin-top: 1rem; }
+
+  .stamp-btn {
+    flex: 1;
+    padding: 14px;
+    border-radius: 10px;
+    border: none;
+    font-size: 16px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .stamp-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .stamp-btn.in  { background: #d4edda; color: #1a5c30; }
+  .stamp-btn.out { background: #fce8e8; color: #7a1f1f; }
+
+  .status {
+    font-size: 13px;
+    color: #555;
+    text-align: center;
+    padding: 8px 0 0;
+    min-height: 24px;
+  }
+
+  .log-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .log-table th { text-align: left; padding: 6px 8px; border-bottom: 0.5px solid #e8e8e0; color: #888; font-weight: 500; }
+  .log-table td { padding: 7px 8px; border-bottom: 0.5px solid #f0f0e8; }
+
+  .badge {
+    display: inline-block; padding: 2px 8px;
+    border-radius: 6px; font-size: 12px;
+  }
+  .badge.in  { background: #d4edda; color: #1a5c30; }
+  .badge.out { background: #fce8e8; color: #7a1f1f; }
+
+  .metric-row { display: flex; gap: 10px; margin-bottom: 0.75rem; }
+  .metric { flex: 1; background: #f7f7f2; border-radius: 8px; padding: 10px 12px; }
+  .metric-label { font-size: 11px; color: #888; margin-bottom: 2px; }
+  .metric-value { font-size: 22px; font-weight: 500; }
+
+  .loading { text-align: center; color: #aaa; padding: 1.5rem; font-size: 13px; }
+  .error-msg { color: #c0392b; font-size: 13px; padding: 8px 0; }
+</style>
+</head>
+<body>
+
+<h1>オフ会 出退勤打刻</h1>
+<p class="subtitle" id="event-label">6月28日 オフィス気分オフ会</p>
+
+<div class="card">
+  <p class="card-title">名前を選んでください</p>
+  <div class="name-grid" id="name-grid">
+    <p class="loading">読み込み中...</p>
+  </div>
+  <div class="action-row">
+    <button class="stamp-btn in"  id="btn-in"  disabled onclick="stamp('in')">入場</button>
+    <button class="stamp-btn out" id="btn-out" disabled onclick="stamp('out')">退場</button>
+  </div>
+  <p class="status" id="status"></p>
+</div>
+
+<div class="card">
+  <div class="metric-row">
+    <div class="metric"><div class="metric-label">現在の在席数</div><div class="metric-value" id="count-present">—</div></div>
+    <div class="metric"><div class="metric-label">累計入場数</div><div class="metric-value" id="count-total">—</div></div>
+  </div>
+  <p class="card-title">直近の記録</p>
+  <div id="log-area"><p class="loading">読み込み中...</p></div>
+</div>
+
+<script>
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzB7-6XHLlNl9zQaTTsMXUOxmDCCKl8HjNXSAH8-h5fqR2KEoB6rKsCdyHW1c8Gjq0/exec";
+
+let selected = null;
+
+async function fetchNames() {
+  try {
+    const res = await fetch(SCRIPT_URL + "?action=getNames");
+    const data = await res.json();
+    renderNames(data.names || []);
+  } catch(e) {
+    document.getElementById('name-grid').innerHTML = '<p class="error-msg">名前リストの読み込みに失敗しました</p>';
+  }
+}
+
+function renderNames(names) {
+  const grid = document.getElementById('name-grid');
+  if (!names.length) {
+    grid.innerHTML = '<p style="font-size:13px;color:#aaa">参加者が登録されていません</p>';
+    return;
+  }
+  grid.innerHTML = '';
+  names.forEach(n => {
+    const btn = document.createElement('button');
+    btn.className = 'name-btn' + (selected === n ? ' selected' : '');
+    btn.textContent = n;
+    btn.onclick = () => {
+      selected = (selected === n) ? null : n;
+      renderNames(names);
+      document.getElementById('btn-in').disabled = !selected;
+      document.getElementById('btn-out').disabled = !selected;
+      document.getElementById('status').textContent = selected ? selected + ' を選択中' : '';
+    };
+    grid.appendChild(btn);
+  });
+}
+
+async function stamp(type) {
+  if (!selected) return;
+  const name = selected;
+  document.getElementById('btn-in').disabled = true;
+  document.getElementById('btn-out').disabled = true;
+  document.getElementById('status').textContent = '送信中...';
+  try {
+    const res = await fetch(SCRIPT_URL, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'stamp', name, type })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      document.getElementById('status').textContent =
+        (type === 'in' ? '入場' : '退場') + ' しました ✓ ' + data.time;
+      selected = null;
+      await fetchNames();
+      await fetchLogs();
+    }
+  } catch(e) {
+    document.getElementById('status').textContent = '送信に失敗しました。もう一度お試しください。';
+    document.getElementById('btn-in').disabled = false;
+    document.getElementById('btn-out').disabled = false;
+  }
+}
+
+async function fetchLogs() {
+  try {
+    const res = await fetch(SCRIPT_URL + "?action=getLogs");
+    const data = await res.json();
+    renderLogs(data.logs || []);
+  } catch(e) {}
+}
+
+function renderLogs(logs) {
+  const area = document.getElementById('log-area');
+  if (!logs.length) {
+    area.innerHTML = '<p style="font-size:13px;color:#aaa;text-align:center;padding:1rem">まだ記録がありません</p>';
+    document.getElementById('count-present').textContent = '0';
+    document.getElementById('count-total').textContent = '0';
+    return;
+  }
+  const inNames = new Set(logs.filter(r=>r.type==='in').map(r=>r.name));
+  const outNames = new Set(logs.filter(r=>r.type==='out').map(r=>r.name));
+  let present = 0;
+  inNames.forEach(n => { if (!outNames.has(n)) present++; });
+  document.getElementById('count-present').textContent = present;
+  document.getElementById('count-total').textContent = inNames.size;
+
+  const table = document.createElement('table');
+  table.className = 'log-table';
+  table.innerHTML = '<thead><tr><th>時刻</th><th>名前</th><th>種別</th></tr></thead>';
+  const tbody = document.createElement('tbody');
+  logs.slice(0, 20).forEach(r => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td>' + r.time + '</td><td>' + r.name + '</td><td><span class="badge ' + r.type + '">' + (r.type==='in'?'入場':'退場') + '</span></td>';
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  area.innerHTML = '';
+  area.appendChild(table);
+}
+
+fetchNames();
+fetchLogs();
+setInterval(fetchLogs, 30000);
+</script>
+</body>
+</html>
